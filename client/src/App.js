@@ -1,20 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { supabase } from './supabase';
+import { useAuth } from './context/AuthContext';
 import PhaseCard from './components/PhaseCard';
 import Sidebar from './components/Sidebar';
+import AuthPage from './pages/AuthPage';
 import './App.css';
 
 const API = process.env.REACT_APP_API || '';
-
-function loadProgress() {
-  try {
-    const saved = localStorage.getItem('roadmap-progress');
-    return saved ? JSON.parse(saved) : {};
-  } catch { return {}; }
-}
-
-function saveProgressLS(data) {
-  try { localStorage.setItem('roadmap-progress', JSON.stringify(data)); } catch {}
-}
 
 function applyProgress(phases, progress) {
   return phases.map((phase, pi) => {
@@ -43,7 +35,8 @@ function extractProgress(phases) {
   return progress;
 }
 
-function App() {
+function Dashboard() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -51,33 +44,50 @@ function App() {
   useEffect(() => {
     fetch(`${API}/api/roadmap`)
       .then(r => r.json())
-      .then(d => {
-        const progress = loadProgress();
+      .then(async d => {
+        let progress = {};
+
+        try {
+          const local = localStorage.getItem('roadmap-progress');
+          if (local) progress = JSON.parse(local);
+        } catch {}
+
+        if (user) {
+          const { data: row } = await supabase
+            .from('user_progress')
+            .select('data')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+          if (row?.data) {
+            progress = row.data;
+            localStorage.setItem('roadmap-progress', JSON.stringify(progress));
+          }
+        }
+
         d.phases = applyProgress(d.phases, progress);
         setData(d);
         setLoading(null);
       })
       .catch(e => { setError(e.message); setLoading(null); });
-  }, []);
+  }, [user]);
 
-  const syncBackend = useCallback(phases => {
-    const payload = { phases: phases.map(p => ({
-      id: p.id, completed: p.completed, status: p.status,
-      topics: p.topics.map(t => ({ completed: t.completed, status: t.status }))
-    }))};
-    fetch(`${API}/api/roadmap/progress`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).catch(() => {});
-  }, []);
+  const persist = useCallback(async (phases) => {
+    const progress = extractProgress(phases);
+    localStorage.setItem('roadmap-progress', JSON.stringify(progress));
+
+    if (user) {
+      await supabase.from('user_progress').upsert(
+        { user_id: user.id, data: progress, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+    }
+  }, [user]);
 
   function withSave(updater) {
     setData(prev => {
       const newPhases = updater(prev.phases);
-      const progress = extractProgress(newPhases);
-      saveProgressLS(progress);
-      syncBackend(newPhases);
+      persist(newPhases);
       return { ...prev, phases: newPhases };
     });
   }
@@ -119,6 +129,10 @@ function App() {
     ));
   }
 
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+  }
+
   const completed = data?.phases?.filter(p =>
     p.topics.length > 0 && p.topics.every(t => t.completed)
   ).length || 0;
@@ -133,7 +147,13 @@ function App() {
   return (
     <div className="app-container">
       <header className="app-header">
-        <h1>AI Engineer Roadmap 2026</h1>
+        <div className="header-top">
+          <h1>AI Engineer Roadmap 2026</h1>
+          <div className="header-right">
+            <span className="user-email">{user?.email}</span>
+            <button className="signout-btn" onClick={handleSignOut}>Sign Out</button>
+          </div>
+        </div>
         <div className="stats">
           <span>Phases: {completed}/{total} complete</span>
           <span className="stat-divider">|</span>
@@ -165,4 +185,16 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="app-container"><div className="loader">Loading...</div></div>;
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  return <Dashboard />;
+}
