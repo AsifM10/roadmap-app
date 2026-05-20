@@ -1,0 +1,14 @@
+{
+  "name": "roadmap-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd client && npm install && npm run build",
+    "server": "cd server && node index.js",
+    "start": "cd client && npx react-scripts start"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  }
+}
